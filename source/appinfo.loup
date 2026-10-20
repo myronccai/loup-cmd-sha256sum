@@ -3,11 +3,11 @@
 # Application identity. Keep APP_NAME and APP_VERSION in step with `name`
 # and `version` in package.lppkg.
 
-pub const APP_NAME: string = "myapp";
+pub const APP_NAME: string = "sha256sum";
 pub const APP_VERSION: string = "0.1.0";
-pub const APP_SUMMARY: string = "A command-line application written in Loup.";
+pub const APP_SUMMARY: string = "Print or check SHA-256 checksums (a Loup recreation of GNU sha256sum).";
 
-# Exit statuses returned by main().
+# Exit statuses returned by main(), as GNU sha256sum uses them: any
+# problem, including a usage error, gives 1.
 pub const EXIT_OK: int = 0;
 pub const EXIT_FAILURE: int = 1;
-pub const EXIT_USAGE: int = 2;

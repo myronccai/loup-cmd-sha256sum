@@ -1,0 +1,110 @@
+@mode(host.dual)
+
+# Output lines, name escaping and quoting, and parsing checksum lines.
+
+from debug.assert import (expect, expectEq);
+from commands.lines import (hash_line, result_name, quote_name, escape_name, unescape_name, needs_escape, cut_at_nul, is_hex, parse_check_line, new_state);
+
+const HEX: string = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+func test_hash_line_formats(): void {
+    expectEq(hash_line("a.txt", HEX, false, false, false), HEX + "  a.txt\n", "text mode");
+    expectEq(hash_line("a.txt", HEX, true, false, false), HEX + " *a.txt\n", "binary mode");
+    expectEq(hash_line("a.txt", HEX, true, true, false), "SHA256 (a.txt) = " + HEX + "\n", "--tag");
+    expectEq(hash_line("-", HEX, false, false, true), HEX + "  -" + str(char.of(0)), "-z ends with NUL");
+}
+
+func test_hash_line_escapes_names(): void {
+    expectEq(hash_line("a\\b", HEX, false, false, false), "\\" + HEX + "  a\\\\b\n", "backslash");
+    expectEq(hash_line("a\nb", HEX, false, true, false), "\\SHA256 (a\\nb) = " + HEX + "\n", "newline, --tag");
+    expectEq(hash_line("a\nb", HEX, false, false, true), HEX + "  a\nb" + str(char.of(0)), "-z: no escaping");
+}
+
+func test_escape_round_trip(): void {
+    expect(needs_escape("a\\b") and needs_escape("x\n"), "needs escape");
+    expect(!needs_escape("plain name"), "no escape");
+    expectEq(escape_name("a\\b\nc"), "a\\\\b\\nc", "escape");
+    expectEq(unescape_name("a\\\\b\\nc\\rd").unwrap(), "a\\b\nc\rd", "unescape");
+    expect(unescape_name("bad\\x").is_err(), "unknown escape");
+    expect(unescape_name("trailing\\").is_err(), "trailing backslash");
+    expect(unescape_name("nul" + str(char.of(0))).is_err(), "NUL");
+}
+
+func test_result_name(): void {
+    expectEq(result_name("plain"), "plain", "plain");
+    expectEq(result_name("a\nb"), "\\a\\nb", "escaped with a leading backslash");
+}
+
+func test_quote_name(): void {
+    expectEq(quote_name("plain.txt"), "plain.txt", "safe");
+    expectEq(quote_name("a b"), "'a b'", "space");
+    expectEq(quote_name("it's"), "\"it's\"", "single quote");
+    expectEq(quote_name("it's $x"), "'it'\\''s $x'", "single quote and dollar");
+    expectEq(quote_name("a\nb"), "'a'$'\\n''b'", "newline");
+    expectEq(quote_name("~home"), "'~home'", "leading tilde");
+    expectEq(quote_name(""), "''", "empty");
+}
+
+func test_cut_at_nul(): void {
+    expectEq(cut_at_nul("abc" + str(char.of(0)) + "junk"), "abc", "cut");
+    expectEq(cut_at_nul("abc"), "abc", "unchanged");
+}
+
+func test_is_hex(): void {
+    expect(is_hex(HEX), "lower case");
+    expect(is_hex("ABCDEF0123"), "upper case");
+    expect(!is_hex("abcg"), "g");
+}
+
+func test_parse_gnu_lines(): void {
+    var state = new_state();
+    let text = parse_check_line(HEX + "  a.txt", edits: state);
+    expect(text.valid, "text line valid");
+    expectEq(text.digest, HEX, "digest");
+    expectEq(text.name, "a.txt", "name");
+    let binary = parse_check_line(HEX + " *b c.txt", edits: state);
+    expect(binary.valid, "binary line valid");
+    expectEq(binary.name, "b c.txt", "name keeps spaces");
+    let upper = parse_check_line("  " + HEX.toUpperCase() + "  u", edits: state);
+    expect(upper.valid, "leading blanks and upper-case hex");
+}
+
+func test_parse_bsd_lines(): void {
+    var state = new_state();
+    let e = parse_check_line("SHA256 (x (1).txt) = " + HEX, edits: state);
+    expect(e.valid, "valid");
+    expectEq(e.name, "x (1).txt", "name runs to the last ')'");
+    let tight = parse_check_line("SHA256(y)=" + HEX, edits: state);
+    expect(tight.valid, "no blanks");
+    expectEq(tight.name, "y", "name");
+    expect(!parse_check_line("SHA256 (z) = abc", edits: state).valid, "short digest");
+    expect(!parse_check_line("MD5 (z) = " + HEX, edits: state).valid, "other algorithm");
+}
+
+func test_parse_escaped_lines(): void {
+    var state = new_state();
+    let e = parse_check_line("\\" + HEX + "  a\\nb", edits: state);
+    expect(e.valid, "valid");
+    expectEq(e.name, "a\nb", "unescaped");
+    expect(!parse_check_line("\\" + HEX + "  a\\qb", edits: state).valid, "bad escape");
+}
+
+func test_parse_bad_lines(): void {
+    var state = new_state();
+    expect(!parse_check_line("garbage", edits: state).valid, "garbage");
+    expect(!parse_check_line(HEX, edits: state).valid, "no name");
+    expect(!parse_check_line(HEX.slice(0, 63) + "g  a", edits: state).valid, "not hex");
+    expect(!parse_check_line(HEX + "x a", edits: state).valid, "no blank after the digest");
+}
+
+func test_single_space_lines(): void {
+    # "HASH NAME" with one blank is accepted when the list starts that way...
+    var first = new_state();
+    let e = parse_check_line(HEX + " name", edits: first);
+    expect(e.valid, "first line decides");
+    expectEq(e.name, "name", "name");
+    # ...and rejected once a two-blank line has been seen.
+    var later = new_state();
+    expect(parse_check_line(HEX + "  a", edits: later).valid, "two blanks");
+    expect(!parse_check_line(HEX + " b", edits: later).valid, "then one blank");
+}

@@ -1,98 +1,181 @@
 @mode(host.dual)
 
-# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
-# parsed by hand into an Options value.
-#
-# Grammar: [OPTIONS] COMMAND [OPERANDS...]
-#   Options may appear anywhere before `--`; everything after `--` is an
-#   operand. Value options accept `--name VALUE` and `--name=VALUE`.
-
-pub const DEFAULT_GREETING: string = "Hello";
+# Command-line parsing for sha256sum, following GNU getopt_long: options and
+# operands may be mixed, short options combine (`-cw`), long options may be
+# abbreviated to a unique prefix (`--stat`), and `--` ends the options.
 
 pub struct Options {
-    pub command: string;
-    pub operands: list[string];
-    pub help: bool;
-    pub version: bool;
-    pub verbose: bool;
-    pub shout: bool;
-    pub greeting: string;
+    pub var help: bool;
+    pub var version: bool;
+    pub var check: bool;           # -c: verify checksums listed in the FILEs
+    pub var binary: int;           # -b 1, -t 0, neither -1 (--tag sets 1)
+    pub var tag: bool;             # --tag: BSD-style "SHA256 (FILE) = HASH"
+    pub var zero: bool;            # -z: end lines with NUL, no escaping
+    pub var quiet: bool;           # --quiet: no OK lines
+    pub var status: bool;          # --status: no output, only the status
+    pub var warn: bool;            # -w: warn about misformatted lines
+    pub var strict: bool;          # --strict: misformatted lines fail
+    pub var ignore_missing: bool;  # --ignore-missing
+    pub var files: list[string];   # operands; "-" when there are none
+}
+
+const LONG_OPTIONS: string = "binary check help ignore-missing quiet status strict tag text version warn zero";
+
+pub func new_options(): Options {
+    let none: list[string] = [];
+    return Options(
+        help = false,
+        version = false,
+        check = false,
+        binary = -1,
+        tag = false,
+        zero = false,
+        quiet = false,
+        status = false,
+        warn = false,
+        strict = false,
+        ignore_missing = false,
+        files = none,
+    );
+}
+
+# The long option that `name` names exactly or as a unique prefix.
+pub func resolve_long(name: string, word: string): Result[string, string] {
+    var matches: list[string] = [];
+    for (candidate in LONG_OPTIONS.split(" ")) {
+        if (candidate == name) {
+            return Ok(candidate);
+        }
+        if (candidate.startsWith(name)) {
+            matches.push(candidate);
+        }
+    }
+    if (matches.len() == 1) {
+        return Ok(matches[0]);
+    }
+    if (matches.len() == 0) {
+        return Err(i"unrecognized option '{$ word $}'");
+    }
+    var listed = "";
+    for (m in matches) {
+        listed += i" '--{$ m $}'";
+    }
+    return Err(i"option '{$ word $}' is ambiguous; possibilities:{$ listed $}");
+}
+
+# Applies one option by its long name. --status, --warn and --quiet replace
+# one another, as in GNU.
+func apply(edits opts: Options, name: string): void {
+    if (name == "binary") {
+        opts.binary = 1;
+    } else if (name == "text") {
+        opts.binary = 0;
+    } else if (name == "check") {
+        opts.check = true;
+    } else if (name == "tag") {
+        opts.tag = true;
+        opts.binary = 1;
+    } else if (name == "zero") {
+        opts.zero = true;
+    } else if (name == "status") {
+        opts.status = true;
+        opts.warn = false;
+        opts.quiet = false;
+    } else if (name == "warn") {
+        opts.status = false;
+        opts.warn = true;
+        opts.quiet = false;
+    } else if (name == "quiet") {
+        opts.status = false;
+        opts.warn = false;
+        opts.quiet = true;
+    } else if (name == "strict") {
+        opts.strict = true;
+    } else if (name == "ignore-missing") {
+        opts.ignore_missing = true;
+    }
+}
+
+func short_name(letter: string): string {
+    return match letter {
+        "b" => "binary",
+        "c" => "check",
+        "t" => "text",
+        "w" => "warn",
+        "z" => "zero",
+        _ => "",
+    };
+}
+
+# The combinations GNU rejects, checked in GNU's order.
+pub func validate(opts: Options): Result[bool, string] {
+    if (opts.tag and opts.binary == 0) {
+        return Err("--tag does not support --text mode");
+    }
+    if (opts.zero and opts.check) {
+        return Err("the --zero option is not supported when verifying checksums");
+    }
+    if (opts.tag and opts.check) {
+        return Err("the --tag option is meaningless when verifying checksums");
+    }
+    if (opts.binary >= 0 and opts.check) {
+        return Err("the --binary and --text options are meaningless when verifying checksums");
+    }
+    let only_check = [
+        (opts.ignore_missing, "ignore-missing"),
+        (opts.status, "status"),
+        (opts.warn, "warn"),
+        (opts.quiet, "quiet"),
+        (opts.strict, "strict"),
+    ];
+    for ((given, name) in only_check) {
+        if (given and !opts.check) {
+            return Err(i"the --{$ name $} option is meaningful only when verifying checksums");
+        }
+    }
+    return Ok(true);
 }
 
 pub func parse_args(argv: list[string]): Result[Options, string] {
-    var command = "";
-    var operands: list[string] = [];
-    var help = false;
-    var version = false;
-    var verbose = false;
-    var shout = false;
-    var greeting = DEFAULT_GREETING;
+    var opts = new_options();
     var only_operands = false;
-
-    var i = 0;
-    while (i < argv.len()) {
-        let arg = argv[i];
-        i += 1;
-
+    for (arg in argv) {
         if (only_operands or arg == "-" or !arg.startsWith("-")) {
-            if (command.is_empty()) {
-                command = arg;
-            } else {
-                operands.push(arg);
-            }
+            opts.files.push(arg);
             continue;
         }
         if (arg == "--") {
             only_operands = true;
             continue;
         }
-
-        # Split `--name=value` into its name and inline value.
-        var name = arg;
-        var inline_value: Option[string] = None;
-        if (arg.startsWith("--") and arg.contains("=")) {
-            let parts = arg.split("=");
-            name = parts[0];
-            inline_value = Some(parts.slice(1).join("="));
-        }
-
-        if (name == "-g" or name == "--greeting") {
-            match inline_value {
-                Some(v) => { greeting = v; },
-                None => {
-                    if (i >= argv.len()) {
-                        return Err(i"option '{$ name $}' requires a value");
-                    }
-                    greeting = argv[i];
-                    i += 1;
-                },
+        if (arg.startsWith("--")) {
+            let body = arg.slice(2);
+            let eq = body.index_of("=");
+            let given = if (eq >= 0) { body.slice(0, eq) } else { body };
+            let word = if (eq >= 0) { arg.slice(0, eq + 2) } else { arg };
+            let name = resolve_long(given, word)?;
+            if (eq >= 0) {
+                return Err(i"option '--{$ name $}' doesn't allow an argument");
             }
+            if (name == "help" or name == "version") {
+                opts.help = name == "help";
+                opts.version = name == "version";
+                return Ok(opts);
+            }
+            apply(edits: opts, name);
             continue;
         }
-
-        if (inline_value.is_some()) {
-            return Err(i"option '{$ name $}' does not take a value");
-        }
-        if (name == "-h" or name == "--help") {
-            help = true;
-        } else if (name == "-V" or name == "--version") {
-            version = true;
-        } else if (name == "-v" or name == "--verbose") {
-            verbose = true;
-        } else if (name == "--shout") {
-            shout = true;
-        } else {
-            return Err(i"unknown option '{$ name $}'");
+        for (letter in arg.slice(1)) {
+            let name = short_name(letter);
+            if (name == "") {
+                return Err(i"invalid option -- '{$ letter $}'");
+            }
+            apply(edits: opts, name);
         }
     }
-
-    return Ok(Options(
-        command = command,
-        operands = operands,
-        help = help,
-        version = version,
-        verbose = verbose,
-        shout = shout,
-        greeting = greeting,
-    ));
+    validate(opts)?;
+    if (opts.files.len() == 0) {
+        opts.files.push("-");
+    }
+    return Ok(opts);
 }

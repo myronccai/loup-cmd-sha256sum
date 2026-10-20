@@ -1,0 +1,229 @@
+@mode(host.dual)
+
+# sha256sum: prints the SHA-256 digest of each FILE, or with -c checks the
+# digests listed in each FILE. Everything to print goes into a Report, in
+# order, so that tests can look at it; run_sha256sum prints it.
+
+from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE);
+from cli.args import (Options);
+from hash.sha256 import (hex_digest);
+from commands.lines import (ParseState, new_state, parse_check_line, hash_line, result_name, quote_name);
+from io.fs import (isDir);
+
+# Lines for standard output and standard error, in the order they were
+# produced, and whether everything succeeded.
+pub struct Report {
+    pub var texts: list[string];
+    pub var to_err: list[bool];
+    pub var ok: bool;
+    pub var stdin_used: bool;
+}
+
+pub func new_report(): Report {
+    let none: list[string] = [];
+    let flags: list[bool] = [];
+    return Report(texts = none, to_err = flags, ok = true, stdin_used = false);
+}
+
+func say(edits r: Report, text: string): void {
+    r.texts.push(text);
+    r.to_err.push(false);
+}
+
+# An error message: "sha256sum: TEXT" on standard error.
+func complain(edits r: Report, text: string): void {
+    r.texts.push(i"{$ APP_NAME $}: {$ text $}");
+    r.to_err.push(true);
+}
+
+# Everything printed to standard output, joined (for tests).
+pub func stdout_of(r: Report): string {
+    var parts: list[string] = [];
+    for (k in 0..r.texts.len()) {
+        if (!r.to_err[k]) {
+            parts.push(r.texts[k]);
+        }
+    }
+    return parts.join("");
+}
+
+# Why `name` cannot be read ("" if it can). Standard input is "-".
+pub func input_problem(name: string): string {
+    if (name == "-") {
+        return "";
+    }
+    if (!exists(name)) {
+        return "No such file or directory";
+    }
+    if (isDir(name)) {
+        return "Is a directory";
+    }
+    return "";
+}
+
+# The file to read for `name`: standard input for "-", which (as in GNU) is
+# empty when read a second time.
+func source_path(edits r: Report, name: string): string {
+    if (name != "-") {
+        return name;
+    }
+    if (r.stdin_used) {
+        return "/dev/null";
+    }
+    r.stdin_used = true;
+    return "/dev/stdin";
+}
+
+# The SHA-256 digest of a file or of standard input, in hex. The bytes are
+# read and hashed here: a native build crashes when a function returns
+# `bytes` (see NATIVE-NOTES).
+func input_digest(edits r: Report, name: string): string {
+    let data = readBytes(source_path(edits: r, name));
+    return hex_digest(data);
+}
+
+# The text of a checksum list. readText keeps the raw bytes of names that
+# are not valid UTF-8 in native builds, where bytes.decode() would replace
+# them with U+FFFD.
+func input_text(edits r: Report, name: string): string {
+    return readText(source_path(edits: r, name));
+}
+
+# Hash mode: one line per readable FILE.
+pub func hash_files(edits r: Report, opts: Options): void {
+    for (name in opts.files) {
+        let problem = input_problem(name);
+        if (problem != "") {
+            complain(edits: r, quote_name(name) + ": " + problem);
+            r.ok = false;
+            continue;
+        }
+        let hex = input_digest(edits: r, name);
+        say(edits: r, hash_line(name, hex, opts.binary == 1, opts.tag, opts.zero));
+    }
+}
+
+func plural(n: int, one: string, many: string): string {
+    return str(n) + " " + if (n == 1) { one } else { many };
+}
+
+# Check mode for one checksum list (GNU's digest_check). Returns whether
+# every listed file was read and matched.
+pub func check_list(edits r: Report, opts: Options, edits state: ParseState, list_name: string): bool {
+    let is_stdin = list_name == "-";
+    let shown = quote_name(if (is_stdin) { "standard input" } else { list_name });
+    if (!is_stdin) {
+        if (!exists(list_name)) {
+            complain(edits: r, shown + ": No such file or directory");
+            return false;
+        }
+        if (isDir(list_name)) {
+            complain(edits: r, shown + ": read error");
+            return false;
+        }
+    }
+    let lines = input_text(edits: r, list_name).split("\n");
+
+    var misformatted = 0;
+    var unreadable = 0;
+    var mismatched = 0;
+    var properly_formatted = false;
+    var matched = false;
+    var count = lines.len();
+    if (count > 0 and lines[count - 1] == "") {
+        count -= 1;
+    }
+    for (number in 1..count + 1) {
+        var line = lines[number - 1];
+        if (line.startsWith("#")) {
+            continue;
+        }
+        if (line.endsWith("\r")) {
+            line = line.slice(0, line.len() - 1);
+        }
+        if (line.len() == 0) {
+            continue;
+        }
+        let e = parse_check_line(line, edits: state);
+        if (!e.valid or (is_stdin and e.name == "-")) {
+            misformatted += 1;
+            if (opts.warn) {
+                complain(edits: r, shown + ": " + str(number) + ": improperly formatted SHA256 checksum line");
+            }
+            continue;
+        }
+        properly_formatted = true;
+
+        let problem = input_problem(e.name);
+        if (problem == "No such file or directory" and opts.ignore_missing) {
+            continue;
+        }
+        if (problem != "") {
+            complain(edits: r, quote_name(e.name) + ": " + problem);
+            unreadable += 1;
+            if (!opts.status) {
+                say(edits: r, result_name(e.name) + ": FAILED open or read\n");
+            }
+            continue;
+        }
+        let hex = input_digest(edits: r, e.name);
+        if (hex == e.digest.toLowerCase()) {
+            matched = true;
+            if (!opts.status and !opts.quiet) {
+                say(edits: r, result_name(e.name) + ": OK\n");
+            }
+        } else {
+            mismatched += 1;
+            if (!opts.status) {
+                say(edits: r, result_name(e.name) + ": FAILED\n");
+            }
+        }
+    }
+
+    if (!properly_formatted) {
+        complain(edits: r, shown + ": no properly formatted checksum lines found");
+    } else if (!opts.status) {
+        if (misformatted > 0) {
+            complain(edits: r, "WARNING: " + plural(misformatted, "line is", "lines are") + " improperly formatted");
+        }
+        if (unreadable > 0) {
+            complain(edits: r, "WARNING: " + plural(unreadable, "listed file", "listed files") + " could not be read");
+        }
+        if (mismatched > 0) {
+            complain(edits: r, "WARNING: " + plural(mismatched, "computed checksum", "computed checksums") + " did NOT match");
+        }
+        if (opts.ignore_missing and !matched) {
+            complain(edits: r, shown + ": no file was verified");
+        }
+    }
+    return properly_formatted and matched and mismatched == 0 and unreadable == 0
+        and (!opts.strict or misformatted == 0);
+}
+
+# Runs the whole command and returns what it would print.
+pub func sha256sum_report(opts: Options): Report {
+    var r = new_report();
+    if (opts.check) {
+        var state = new_state();
+        for (name in opts.files) {
+            if (!check_list(edits: r, opts, edits: state, name)) {
+                r.ok = false;
+            }
+        }
+    } else {
+        hash_files(edits: r, opts);
+    }
+    return r;
+}
+
+pub func run_sha256sum(opts: Options): int {
+    let r = sha256sum_report(opts);
+    for (k in 0..r.texts.len()) {
+        if (r.to_err[k]) {
+            printErr(r.texts[k]);
+        } else {
+            print(r.texts[k]);
+        }
+    }
+    return if (r.ok) { EXIT_OK } else { EXIT_FAILURE };
+}

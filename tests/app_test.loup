@@ -4,22 +4,33 @@
 # normal output and error messages.
 
 from debug.assert import (expectEq);
-from appinfo import (EXIT_OK, EXIT_USAGE);
+from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.app import (run);
+from cli.usage import (version_line);
 
 func test_version_succeeds(): void {
     expectEq(run(["--version"]), EXIT_OK, "--version");
+    expectEq(version_line(), "sha256sum (loup-cmd-sha256sum) 0.1.0", "version line");
 }
 
-func test_hello_succeeds(): void {
-    expectEq(run(["hello", "tests"]), EXIT_OK, "hello NAME");
+func test_help_succeeds(): void {
+    expectEq(run(["--help"]), EXIT_OK, "--help");
 }
 
-func test_unknown_command_is_usage_error(): void {
-    expectEq(run(["bogus"]), EXIT_USAGE, "unknown command");
+func test_hash_succeeds(): void {
+    expectEq(run(["tests/fixtures/abc.txt"]), EXIT_OK, "one file");
 }
 
-func test_missing_command_is_usage_error(): void {
-    let none: list[string] = [];
-    expectEq(run(none), EXIT_USAGE, "no command");
+func test_missing_file_fails(): void {
+    expectEq(run(["tests/fixtures/missing.txt"]), EXIT_FAILURE, "missing file");
+}
+
+func test_check_statuses(): void {
+    expectEq(run(["-c", "tests/fixtures/good.sha256"]), EXIT_OK, "all OK");
+    expectEq(run(["-c", "tests/fixtures/mixed.sha256"]), EXIT_FAILURE, "mismatch");
+}
+
+func test_usage_error_is_status_1(): void {
+    expectEq(run(["--bogus"]), EXIT_FAILURE, "unknown option");
+    expectEq(run(["--quiet", "x"]), EXIT_FAILURE, "--quiet without -c");
 }

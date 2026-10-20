@@ -1,0 +1,85 @@
+@mode(host.dual)
+
+# SHA-256 known-answer tests: the FIPS 180-4 / NIST examples, messages whose
+# padding falls on either side of a block boundary, and the helpers. The
+# one-million-'a' vector runs in tests/e2e.sh against the native binary,
+# because the interpreter takes too long for it.
+
+from debug.assert import (expect, expectEq);
+from hash.sha256 import (hex_digest, digest, to_hex, rotr, padded_tail, initial_state, round_constants);
+
+# `count` copies of the byte `value`.
+func repeated(value: int, count: int): bytes {
+    var xs: list[int] = [];
+    for (i in 0..count) {
+        xs.push(value);
+    }
+    return bytesFromInts(xs);
+}
+
+func test_empty_message(): void {
+    expectEq(hex_digest(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "SHA-256(\"\")");
+}
+
+func test_nist_abc(): void {
+    expectEq(hex_digest(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256(abc)");
+}
+
+func test_nist_two_blocks(): void {
+    let msg = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    expectEq(hex_digest(msg), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1", "448-bit message");
+}
+
+func test_nist_896_bits(): void {
+    let msg = b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    expectEq(hex_digest(msg), "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1", "896-bit message");
+}
+
+func test_block_boundaries(): void {
+    # 55 bytes is the longest message whose padding fits in one block.
+    expectEq(hex_digest(repeated(97, 55)), "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318", "55 x a");
+    expectEq(hex_digest(repeated(97, 56)), "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a", "56 x a");
+    expectEq(hex_digest(repeated(97, 64)), "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb", "64 x a");
+    expectEq(hex_digest(repeated(97, 1000)), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3", "1000 x a");
+}
+
+func test_text_with_newline(): void {
+    expectEq(hex_digest(b"line\n"), "c73b73af8851e9e91bc6b4dc12e7dace0a2bfb931c1d0b8b36ef367319f58cd1", "line\\n");
+}
+
+func test_digest_is_32_bytes(): void {
+    let d = digest(b"abc");
+    expectEq(d.len(), 32, "length");
+    expectEq(d[0], 0xba, "first byte");
+    expectEq(d[31], 0xad, "last byte");
+}
+
+func test_rotr_wraps_within_32_bits(): void {
+    expectEq(rotr(1, 1), 0x80000000, "low bit moves to the top");
+    expectEq(rotr(0x80000000, 31), 1, "top bit moves to the bottom");
+    expectEq(rotr(0x12345678, 8), 0x78123456, "byte rotation");
+    expectEq(rotr(0xFFFFFFFF, 13), 0xFFFFFFFF, "all ones");
+}
+
+func test_padding_lengths(): void {
+    # The tail holds the last partial block, 0x80, zeros and 8 length bytes.
+    expectEq(padded_tail(repeated(0, 0), 0, 0).len(), 64, "empty: one block");
+    expectEq(padded_tail(repeated(0, 55), 0, 55).len(), 64, "55 bytes: one block");
+    expectEq(padded_tail(repeated(0, 56), 0, 56).len(), 128, "56 bytes: two blocks");
+    let tail = padded_tail(b"abc", 0, 3);
+    expectEq(tail[3], 0x80, "0x80 after the message");
+    expectEq(tail[63], 24, "length in bits, big-endian");
+    expectEq(tail[62], 0, "high length byte");
+}
+
+func test_constants(): void {
+    expectEq(initial_state().len(), 8, "eight state words");
+    expectEq(round_constants().len(), 64, "64 round constants");
+    expectEq(round_constants()[63], 0xc67178f2, "last constant");
+}
+
+func test_to_hex(): void {
+    expectEq(to_hex([0, 15, 16, 255]), "000f10ff", "lower-case, two digits each");
+    let none: list[int] = [];
+    expect(to_hex(none) == "", "empty");
+}

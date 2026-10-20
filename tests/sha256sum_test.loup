@@ -1,0 +1,100 @@
+@mode(host.dual)
+
+# The whole command through sha256sum_report, which returns what would be
+# printed. The fixtures are read relative to the repository root, where
+# `make test` runs.
+
+from debug.assert import (expect, expectEq);
+from cli.args import (Options, parse_args);
+from commands.sha256sum import (Report, sha256sum_report, stdout_of, input_problem);
+
+const ABC: string = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const EMPTY: string = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+func report(argv: list[string]): Report {
+    return sha256sum_report(parse_args(argv).unwrap());
+}
+
+# The standard-error lines of a report, each ended by a newline.
+func stderr_of(r: Report): string {
+    var out = "";
+    for (k in 0..r.texts.len()) {
+        if (r.to_err[k]) {
+            out += r.texts[k] + "\n";
+        }
+    }
+    return out;
+}
+
+func test_hash_files(): void {
+    let r = report(["tests/fixtures/abc.txt", "tests/fixtures/empty.txt"]);
+    expect(r.ok, "success");
+    expectEq(stdout_of(r), ABC + "  tests/fixtures/abc.txt\n" + EMPTY + "  tests/fixtures/empty.txt\n", "two lines");
+}
+
+func test_hash_tag(): void {
+    let r = report(["--tag", "tests/fixtures/abc.txt"]);
+    expectEq(stdout_of(r), "SHA256 (tests/fixtures/abc.txt) = " + ABC + "\n", "BSD style");
+}
+
+func test_missing_and_directory(): void {
+    let r = report(["tests/fixtures/missing.txt", "tests/fixtures", "tests/fixtures/abc.txt"]);
+    expect(!r.ok, "failure");
+    expectEq(stdout_of(r), ABC + "  tests/fixtures/abc.txt\n", "the readable file is still hashed");
+    expectEq(stderr_of(r), "sha256sum: tests/fixtures/missing.txt: No such file or directory\nsha256sum: tests/fixtures: Is a directory\n", "messages");
+}
+
+func test_input_problem(): void {
+    expectEq(input_problem("-"), "", "standard input");
+    expectEq(input_problem("tests/fixtures/abc.txt"), "", "readable");
+    expectEq(input_problem("tests/fixtures/nope"), "No such file or directory", "missing");
+    expectEq(input_problem("tests"), "Is a directory", "directory");
+}
+
+func test_check_good_list(): void {
+    let r = report(["-c", "tests/fixtures/good.sha256"]);
+    expect(r.ok, "all match");
+    expectEq(stdout_of(r), "tests/fixtures/abc.txt: OK\ntests/fixtures/empty.txt: OK\n", "OK lines");
+    expectEq(stderr_of(r), "", "no messages");
+}
+
+func test_check_mixed_list(): void {
+    let r = report(["-c", "tests/fixtures/mixed.sha256"]);
+    expect(!r.ok, "failure");
+    expectEq(stdout_of(r), "tests/fixtures/abc.txt: OK\ntests/fixtures/empty.txt: FAILED\ntests/fixtures/missing.txt: FAILED open or read\n", "results");
+    let want = "sha256sum: tests/fixtures/missing.txt: No such file or directory\n"
+        + "sha256sum: WARNING: 1 line is improperly formatted\n"
+        + "sha256sum: WARNING: 1 listed file could not be read\n"
+        + "sha256sum: WARNING: 1 computed checksum did NOT match\n";
+    expectEq(stderr_of(r), want, "warnings");
+}
+
+func test_check_quiet_and_status(): void {
+    let quiet = report(["-c", "--quiet", "tests/fixtures/good.sha256"]);
+    expect(quiet.ok, "quiet success");
+    expectEq(stdout_of(quiet), "", "no OK lines");
+    let status = report(["-c", "--status", "tests/fixtures/mixed.sha256"]);
+    expect(!status.ok, "status failure");
+    expectEq(stdout_of(status), "", "no output");
+    expectEq(stderr_of(status), "sha256sum: tests/fixtures/missing.txt: No such file or directory\n", "only the open error");
+}
+
+func test_check_warn_and_strict(): void {
+    let warn = report(["-c", "-w", "--ignore-missing", "tests/fixtures/mixed.sha256"]);
+    let message = "sha256sum: tests/fixtures/mixed.sha256: 4: improperly formatted SHA256 checksum line\n";
+    expect(stderr_of(warn).startsWith(message), "line number of the bad line");
+    let strict = report(["-c", "--strict", "tests/fixtures/good.sha256"]);
+    expect(strict.ok, "strict with no bad lines");
+}
+
+func test_check_missing_list(): void {
+    let r = report(["-c", "tests/fixtures/none.sha256"]);
+    expect(!r.ok, "failure");
+    expectEq(stderr_of(r), "sha256sum: tests/fixtures/none.sha256: No such file or directory\n", "message");
+}
+
+func test_check_list_without_checksums(): void {
+    let r = report(["-c", "tests/fixtures/abc.txt"]);
+    expect(!r.ok, "failure");
+    expectEq(stderr_of(r), "sha256sum: tests/fixtures/abc.txt: no properly formatted checksum lines found\n", "message");
+}

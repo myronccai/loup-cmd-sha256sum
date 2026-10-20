@@ -1,0 +1,326 @@
+@mode(host.dual)
+
+# The text formats of sha256sum: output lines, file-name escaping, the
+# quoting GNU uses for names in error messages, and parsing a line of a
+# checksum list (GNU's split_3 and bsd_split_3).
+
+pub const DIGEST_HEX: int = 64;
+
+# One parsed checksum line: whether it was well formed, the expected hex
+# digest and the file name. (The flag is not called `ok`: Report has an `ok`
+# field, and native builds misread structs that share a field name at
+# different positions; see NATIVE-NOTES.)
+pub struct Entry {
+    pub var valid: bool;
+    pub var digest: string;
+    pub var name: string;
+}
+
+# GNU decides once per run whether "HASH NAME" lines with a single space
+# are BSD "reversed" lines (-1 not yet known, 0 no, 1 yes).
+pub struct ParseState {
+    pub var bsd_reversed: int;
+}
+
+pub func new_state(): ParseState {
+    return ParseState(bsd_reversed = -1);
+}
+
+func entry(valid: bool, digest: string, name: string): Entry {
+    return Entry(valid = valid, digest = digest, name = name);
+}
+
+pub func bad_entry(): Entry {
+    return entry(false, "", "");
+}
+
+# Names with a backslash or a newline are written escaped, after a leading
+# backslash on the line.
+pub func needs_escape(name: string): bool {
+    return name.index_of("\\") >= 0 or name.index_of("\n") >= 0;
+}
+
+pub func escape_name(name: string): string {
+    var out = "";
+    for (ch in name) {
+        out += if (ch == "\\") { "\\\\" } else if (ch == "\n") { "\\n" } else { ch };
+    }
+    return out;
+}
+
+# The output line for one file: "HASH  NAME" (" *NAME" with -b) or, with
+# --tag, "SHA256 (NAME) = HASH", ended by a newline or with -z a NUL.
+pub func hash_line(name: string, hex: string, binary: bool, tag: bool, zero: bool): string {
+    let escaped = !zero and needs_escape(name);
+    let shown = if (escaped) { escape_name(name) } else { name };
+    let lead = if (escaped) { "\\" } else { "" };
+    let end = if (zero) { str(char.of(0)) } else { "\n" };
+    if (tag) {
+        return lead + "SHA256 (" + shown + ") = " + hex + end;
+    }
+    let mode = if (binary) { "*" } else { " " };
+    return lead + hex + " " + mode + shown + end;
+}
+
+# The name as a check result shows it: escaped, with a leading backslash,
+# when needed.
+pub func result_name(name: string): string {
+    if (needs_escape(name)) {
+        return "\\" + escape_name(name);
+    }
+    return name;
+}
+
+# The code point of a one-character string (-1 for a unit that is not a
+# whole UTF-8 character).
+func code_of(ch: string): int {
+    return match char.fromString(ch) {
+        Some(c) => c.toInt(),
+        None => -1,
+    };
+}
+
+# A control character as GNU writes it inside $'...'. Statement form: a
+# match expression whose arm builds a new string returns freed memory in
+# native builds.
+func control_escape(ch: string): string {
+    let code = code_of(ch);
+    if (code == 7) {
+        return "\\a";
+    } else if (code == 8) {
+        return "\\b";
+    } else if (code == 9) {
+        return "\\t";
+    } else if (code == 10) {
+        return "\\n";
+    } else if (code == 11) {
+        return "\\v";
+    } else if (code == 12) {
+        return "\\f";
+    } else if (code == 13) {
+        return "\\r";
+    }
+    return "\\" + str(code / 64) + str((code / 8) % 8) + str(code % 8);
+}
+
+func is_control(ch: string): bool {
+    let code = code_of(ch);
+    return code >= 0 and (code < 32 or code == 127);
+}
+
+# A file name as GNU's error messages quote it (the shell-escape style):
+# unchanged when safe, otherwise in single quotes, with control characters
+# as $'\n'. A name with a single quote goes in double quotes instead when
+# nothing in it is special inside double quotes.
+pub func quote_name(name: string): string {
+    let special = " !\"$&'()*:;<=>?[\\]^`|";
+    # Characters that mean something different inside double quotes.
+    let not_in_double = "!\"$&()*;<=>?[\\]^`|";
+    var needs = false;
+    var has_quote = false;
+    var double_ok = true;
+    var i = 0;
+    for (ch in name) {
+        if (ch == "'") {
+            has_quote = true;
+        } else if (is_control(ch)) {
+            needs = true;
+            double_ok = false;
+        } else if (special.index_of(ch) >= 0 or (i == 0 and (ch == "#" or ch == "~"))) {
+            needs = true;
+            if (not_in_double.index_of(ch) >= 0) {
+                double_ok = false;
+            }
+        }
+        i += 1;
+    }
+    if (name.len() == 0) {
+        return "''";
+    }
+    if (!needs and !has_quote) {
+        return name;
+    }
+    if (has_quote and double_ok) {
+        return "\"" + name + "\"";
+    }
+    var out = "";
+    var open = false;
+    for (ch in name) {
+        if (is_control(ch)) {
+            if (open) {
+                out += "'";
+                open = false;
+            }
+            out += "$'" + control_escape(ch) + "'";
+        } else {
+            if (!open) {
+                out += "'";
+                open = true;
+            }
+            out += if (ch == "'") { "'\\''" } else { ch };
+        }
+    }
+    if (open) {
+        out += "'";
+    }
+    return out;
+}
+
+# GNU reads a checksum line as a C string, so an unescaped name ends at
+# its first NUL.
+pub func cut_at_nul(name: string): string {
+    let at = name.index_of(str(char.of(0)));
+    if (at >= 0) {
+        return name.slice(0, at);
+    }
+    return name;
+}
+
+# Undoes escape_name; Err for a backslash before anything but \, n or r,
+# and for a NUL.
+pub func unescape_name(text: string): Result[string, bool] {
+    var out = "";
+    var pending = false;
+    let nul = str(char.of(0));
+    for (ch in text) {
+        if (ch == nul) {
+            return Err(false);
+        }
+        if (pending) {
+            if (ch == "\\") {
+                out += "\\";
+            } else if (ch == "n") {
+                out += "\n";
+            } else if (ch == "r") {
+                out += "\r";
+            } else {
+                return Err(false);
+            }
+            pending = false;
+        } else if (ch == "\\") {
+            pending = true;
+        } else {
+            out += ch;
+        }
+    }
+    if (pending) {
+        return Err(false);
+    }
+    return Ok(out);
+}
+
+func is_white(ch: string): bool {
+    return ch == " " or ch == "\t";
+}
+
+pub func is_hex(text: string): bool {
+    for (ch in text) {
+        if ("0123456789abcdefABCDEF".index_of(ch) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+# The index of the last `)` in `text`, or -1.
+func last_paren(text: string): int {
+    var k = text.len() - 1;
+    while (k >= 0) {
+        if (text.slice(k, k + 1) == ")") {
+            return k;
+        }
+        k -= 1;
+    }
+    return -1;
+}
+
+# BSD style, after "SHA256 (": "NAME) = HASH". The name runs to the last ')'.
+func parse_bsd(rest: string, escaped: bool): Entry {
+    let close = last_paren(rest);
+    if (close < 0) {
+        return bad_entry();
+    }
+    var name = rest.slice(0, close);
+    if (escaped) {
+        let plain = unescape_name(name);
+        if (plain.is_err()) {
+            return bad_entry();
+        }
+        name = plain.unwrap();
+    } else {
+        name = cut_at_nul(name);
+    }
+    var i = close + 1;
+    while (i < rest.len() and is_white(rest.slice(i, i + 1))) {
+        i += 1;
+    }
+    if (i >= rest.len() or rest.slice(i, i + 1) != "=") {
+        return bad_entry();
+    }
+    i += 1;
+    while (i < rest.len() and is_white(rest.slice(i, i + 1))) {
+        i += 1;
+    }
+    let digest = rest.slice(i);
+    if (digest.len() != DIGEST_HEX or !is_hex(digest)) {
+        return bad_entry();
+    }
+    return entry(true, digest, name);
+}
+
+# Parses one line of a checksum list (without its line ending): GNU style
+# "HASH  NAME" or "HASH *NAME", or BSD style "SHA256 (NAME) = HASH". A
+# leading backslash means the name is escaped.
+pub func parse_check_line(line: string, edits state: ParseState): Entry {
+    var i = 0;
+    while (i < line.len() and is_white(line.slice(i, i + 1))) {
+        i += 1;
+    }
+    var escaped = false;
+    if (line.slice(i, i + 1) == "\\") {
+        escaped = true;
+        i += 1;
+    }
+
+    if (line.slice(i).startsWith("SHA256")) {
+        i += 6;
+        if (line.slice(i, i + 1) == " ") {
+            i += 1;
+        }
+        if (line.slice(i, i + 1) == "(") {
+            return parse_bsd(line.slice(i + 1), escaped);
+        }
+        return bad_entry();
+    }
+
+    # At least the digest, one blank and a one-character name.
+    if (line.len() - i < DIGEST_HEX + 2) {
+        return bad_entry();
+    }
+    let digest = line.slice(i, i + DIGEST_HEX);
+    i += DIGEST_HEX;
+    if (!is_white(line.slice(i, i + 1)) or !is_hex(digest)) {
+        return bad_entry();
+    }
+    i += 1;
+    let next = line.slice(i, i + 1);
+    if (line.len() - i == 1 or (next != " " and next != "*")) {
+        # "HASH NAME" with one blank: allowed only if the list started that way.
+        if (state.bsd_reversed == 0) {
+            return bad_entry();
+        }
+        state.bsd_reversed = 1;
+    } else if (state.bsd_reversed != 1) {
+        state.bsd_reversed = 0;
+        i += 1;
+    }
+    let name = line.slice(i);
+    if (escaped) {
+        let plain = unescape_name(name);
+        if (plain.is_err()) {
+            return bad_entry();
+        }
+        return entry(true, digest, plain.unwrap());
+    }
+    return entry(true, digest, cut_at_nul(name));
+}
