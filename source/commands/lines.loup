@@ -123,9 +123,10 @@ func is_control(ch: string): bool {
 # as $'\n'. A name with a single quote goes in double quotes instead when
 # nothing in it is special inside double quotes.
 pub func quote_name(name: string): string {
-    let special = " !\"$&'()*:;<=>?[\\]^`|";
-    # Characters that mean something different inside double quotes.
-    let not_in_double = "!\"$&()*;<=>?[\\]^`|";
+    # Characters that make a name need quoting, and the ones among them
+    # that mean something different inside double quotes.
+    const SPECIAL: string = " !\"$&'()*:;<=>?[\\]^`|";
+    const NOT_IN_DOUBLE: string = "!\"$&()*;<=>?[\\]^`|";
     var needs = false;
     var has_quote = false;
     var double_ok = true;
@@ -136,9 +137,9 @@ pub func quote_name(name: string): string {
         } else if (is_control(ch)) {
             needs = true;
             double_ok = false;
-        } else if (special.index_of(ch) >= 0 or (i == 0 and (ch == "#" or ch == "~"))) {
+        } else if (SPECIAL.index_of(ch) >= 0 or (i == 0 and (ch == "#" or ch == "~"))) {
             needs = true;
-            if (not_in_double.index_of(ch) >= 0) {
+            if (NOT_IN_DOUBLE.index_of(ch) >= 0) {
                 double_ok = false;
             }
         }

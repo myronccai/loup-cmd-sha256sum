@@ -2,8 +2,10 @@
 
 # SHA-256 known-answer tests (source/hash/sha256.loup): the FIPS 180-4 /
 # NIST examples, messages whose padding falls on either side of a block
-# boundary, and the helpers. The one-million-'a' vector runs in tests/e2e.sh
-# against the native binary, because the interpreter takes too long for it.
+# boundary, and the helpers; then runtime.crypto().sha256 (Stage0 only) as
+# an oracle on every length up to two blocks and on seeded random text. The
+# one-million-'a' vector runs in tests/e2e.sh against the native binary,
+# because the interpreter takes too long for it.
 #
 # Runtime: host.dual, run by the test runner: `make test` interprets this file
 # with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
@@ -11,6 +13,7 @@
 
 from debug.assert import (expect, expectEq);
 from hash.sha256 import (hex_digest, digest, to_hex, rotr, padded_tail, initial_state, round_constants);
+from core.random import (Random);
 
 # `count` copies of the byte `value`.
 func repeated(value: int, count: int): bytes {
@@ -86,4 +89,43 @@ func test_to_hex(): void {
     expectEq(to_hex([0, 15, 16, 255]), "000f10ff", "lower-case, two digits each");
     let none: list[int] = [];
     expect(to_hex(none) == "", "empty");
+}
+
+# runtime.crypto().sha256 (Stage0 only: a test oracle, never in the
+# binary) hashes the UTF-8 bytes of a string. ASCII strings are their own
+# bytes, so both must agree on every length around the block boundaries
+# and on seeded random strings.
+func ascii_bytes(text: string): bytes {
+    var codes: list[int] = [];
+    for (ch in text) {
+        codes.push(char.fromString(ch).unwrap().toInt());
+    }
+    return bytesFromInts(codes);
+}
+
+func test_agrees_with_runtime_crypto_at_every_length(): void {
+    var text = "";
+    for (n in 0..130) {
+        expectEq(hex_digest(ascii_bytes(text)), runtime.crypto().sha256(text), "length " + str(n));
+        text += str(char.of(97 + n % 26));
+    }
+}
+
+func test_agrees_with_runtime_crypto_on_random_text(): void {
+    var rng = Random(256);
+    for (round in 0..60) {
+        var text = "";
+        var length = 0;
+        safe {
+            length = rng.intRange(0, 300);
+        }
+        for (k in 0..length) {
+            var code = 0;
+            safe {
+                code = rng.intRange(32, 126);
+            }
+            text += str(char.of(code));
+        }
+        expectEq(hex_digest(ascii_bytes(text)), runtime.crypto().sha256(text), "round " + str(round));
+    }
 }

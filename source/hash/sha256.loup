@@ -106,10 +106,8 @@ pub func padded_tail(data: bytes, start: int, size: int): list[int] {
         tail.push(0);
     }
     let bits = size * 8;
-    var shift = 56;
-    while (shift >= 0) {
+    for (var shift = 56; shift >= 0; shift = shift - 8) {
         tail.push((bits >> shift) & 0xFF);
-        shift -= 8;
     }
     return tail;
 }
@@ -126,26 +124,22 @@ pub func digest(data: bytes): list[int] {
     # Whole blocks straight from the input.
     let size = data.len();
     let whole = size - size % 64;
-    var base = 0;
-    while (base < whole) {
+    for (var base = 0; base < whole; base = base + 64) {
         for (t in 0..16) {
             let i = base + t * 4;
             w[t] = (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3];
         }
         compress(edits: h, edits: w, k);
-        base += 64;
     }
 
     # The last partial block, the padding and the length.
     let tail = padded_tail(data, whole, size);
-    base = 0;
-    while (base < tail.len()) {
+    for (var base = 0; base < tail.len(); base = base + 64) {
         for (t in 0..16) {
             let i = base + t * 4;
             w[t] = (tail[i] << 24) | (tail[i + 1] << 16) | (tail[i + 2] << 8) | tail[i + 3];
         }
         compress(edits: h, edits: w, k);
-        base += 64;
     }
 
     var out: list[int] = [];

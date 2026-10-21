@@ -1,7 +1,8 @@
 @mode(host.dual)
 
 # Unit tests for the text formats (source/commands/lines.loup): output
-# lines, name escaping and quoting, and parsing checksum lines.
+# lines, name escaping and quoting, and parsing checksum lines, with
+# system.regex readings of the two line formats as a second opinion.
 #
 # Runtime: host.dual, run by the test runner: `make test` interprets this file
 # with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
@@ -9,6 +10,7 @@
 
 from debug.assert import (expect, expectEq);
 from commands.lines import (hash_line, result_name, quote_name, escape_name, unescape_name, needs_escape, cut_at_nul, is_hex, parse_check_line, new_state);
+from system.regex import (Regex);
 
 const HEX: string = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
@@ -112,4 +114,55 @@ func test_single_space_lines(): void {
     var later = new_state();
     expect(parse_check_line(HEX + "  a", edits: later).valid, "two blanks");
     expect(!parse_check_line(HEX + " b", edits: later).valid, "then one blank");
+}
+
+# A second opinion on parse_check_line from regular expressions for the two
+# formats (unescaped lines with a two-character separator only; the
+# single-space form depends on earlier lines). system.regex fits a test:
+# in the binary it would keep about 1.5 KB per checked line.
+const GNU_LINE: string = "^([0-9a-fA-F]{64}) [ *](.*)$";
+const BSD_LINE: string = "^SHA256 ?\\((.*)\\)[ \\t]*=[ \\t]*([0-9a-fA-F]{64})$";
+
+# "valid digest name" or "invalid" as the regular expressions read `line`.
+func regex_reading(line: string): string {
+    match Regex(GNU_LINE).findFirst(line) {
+        Some(m) => {
+            return "valid " + (m.groupByIndex(1) ?? "") + " " + (m.groupByIndex(2) ?? "");
+        },
+        None => {},
+    }
+    match Regex(BSD_LINE).findFirst(line) {
+        Some(m) => {
+            return "valid " + (m.groupByIndex(2) ?? "") + " " + (m.groupByIndex(1) ?? "");
+        },
+        None => {},
+    }
+    return "invalid";
+}
+
+func parser_reading(line: string): string {
+    var state = new_state();
+    let e = parse_check_line(line, edits: state);
+    if (!e.valid) {
+        return "invalid";
+    }
+    return "valid " + e.digest + " " + e.name;
+}
+
+func test_parser_agrees_with_regular_expressions(): void {
+    let names = ["a.txt", "with space", "paren(1).txt", "x)y", "*star", " lead", "a=b", "tab\tname", "SHA256 (x)"];
+    var lines: list[string] = [];
+    for (name in names) {
+        lines.push(HEX + "  " + name);
+        lines.push(HEX + " *" + name);
+        lines.push("SHA256 (" + name + ") = " + HEX);
+        lines.push("SHA256(" + name + ")=" + HEX.toUpperCase());
+    }
+    lines.push(HEX.slice(1) + "  short.txt");
+    lines.push("SHA256 (no-close = " + HEX);
+    lines.push("SHA256 (x) = " + HEX.slice(2));
+    lines.push("MD5 (x) = " + HEX);
+    for (line in lines) {
+        expectEq(parser_reading(line), regex_reading(line), line);
+    }
 }
