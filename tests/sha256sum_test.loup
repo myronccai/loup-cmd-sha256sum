@@ -1,8 +1,13 @@
 @mode(host.dual)
 
-# The whole command through sha256sum_report, which returns what would be
-# printed. The fixtures are read relative to the repository root, where
-# `make test` runs.
+# Unit tests for the whole command through sha256sum_report
+# (source/commands/sha256sum.loup), which returns what would be printed. The
+# fixtures are read relative to the repository root, where `make test`
+# runs.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
 
 from debug.assert import (expect, expectEq);
 from cli.args import (Options, parse_args);

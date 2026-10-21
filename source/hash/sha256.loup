@@ -6,6 +6,18 @@
 # sized integers (`uint32`) throw NumericOverflowError when they overflow,
 # so the words live in 64-bit `int`s and every sum is masked back to 32
 # bits with `& MASK`. Rotations are built from two shifts and a mask.
+#
+# Runtime: host.dual. Compiled into the native binary build/sha256sum by
+# `make build`; `loup run source/main.loup` interprets the same code, and
+# tests/sha256_test.loup checks it against the NIST vectors under Stage0
+# (`make test`). Interpreted hashing is slow, so the one-million-'a' vector
+# runs only against the binary, in the e2e tests.
+#
+# Structure: the constants (round_constants, initial_state), rotr, the
+# compression function for one 64-byte block, padded_tail for the end of
+# the message, and digest(), which feeds the whole blocks straight from the
+# input and then the one or two padded blocks, before to_hex and
+# hex_digest format the result.
 
 const MASK: int = 0xFFFFFFFF;
 

@@ -3,6 +3,10 @@
 # Command-line parsing for sha256sum, following GNU getopt_long: options and
 # operands may be mixed, short options combine (`-cw`), long options may be
 # abbreviated to a unique prefix (`--stat`), and `--` ends the options.
+#
+# Runtime: host.dual. Compiled into the native binary build/sha256sum by
+# `make build`; `loup run source/main.loup` interprets the same code, and
+# tests/args_test.loup exercises it under Stage0 (`make test`).
 
 pub struct Options {
     pub var help: bool;

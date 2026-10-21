@@ -3,13 +3,23 @@
 # The text formats of sha256sum: output lines, file-name escaping, the
 # quoting GNU uses for names in error messages, and parsing a line of a
 # checksum list (GNU's split_3 and bsd_split_3).
+#
+# Runtime: host.dual. Compiled into the native binary build/sha256sum by
+# `make build`; `loup run source/main.loup` interprets the same code, and
+# tests/lines_test.loup exercises it under Stage0 (`make test`).
+#
+# Structure: writing (hash_line, result_name, quote_name for messages),
+# then reading: unescape_name and cut_at_nul for names, parse_bsd for
+# "SHA256 (NAME) = HASH", and parse_check_line, which recognises the style
+# of each line. A ParseState carries one decision across the lines of a
+# list: whether "HASH NAME" with a single blank is allowed.
 
 pub const DIGEST_HEX: int = 64;
 
 # One parsed checksum line: whether it was well formed, the expected hex
 # digest and the file name. (The flag is not called `ok`: Report has an `ok`
-# field, and native builds misread structs that share a field name at
-# different positions; see NATIVE-NOTES.)
+# field, and Loup 1.26.0 native builds misread structs that share a field
+# name at different positions.)
 pub struct Entry {
     pub var valid: bool;
     pub var digest: string;

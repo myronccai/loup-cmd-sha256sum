@@ -1,9 +1,13 @@
 @mode(host.dual)
 
-# SHA-256 known-answer tests: the FIPS 180-4 / NIST examples, messages whose
-# padding falls on either side of a block boundary, and the helpers. The
-# one-million-'a' vector runs in tests/e2e.sh against the native binary,
-# because the interpreter takes too long for it.
+# SHA-256 known-answer tests (source/hash/sha256.loup): the FIPS 180-4 /
+# NIST examples, messages whose padding falls on either side of a block
+# boundary, and the helpers. The one-million-'a' vector runs in tests/e2e.sh
+# against the native binary, because the interpreter takes too long for it.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
 
 from debug.assert import (expect, expectEq);
 from hash.sha256 import (hex_digest, digest, to_hex, rotr, padded_tail, initial_state, round_constants);

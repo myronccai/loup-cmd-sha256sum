@@ -3,6 +3,18 @@
 # sha256sum: prints the SHA-256 digest of each FILE, or with -c checks the
 # digests listed in each FILE. Everything to print goes into a Report, in
 # order, so that tests can look at it; run_sha256sum prints it.
+#
+# Runtime: host.dual. Compiled into the native binary build/sha256sum by
+# `make build`; `loup run source/main.loup` interprets the same code, and
+# tests/sha256sum_test.loup runs whole commands through sha256sum_report
+# under Stage0 (`make test`).
+#
+# Structure: the Report and its helpers; reading inputs (input_problem,
+# source_path, which makes a second read of standard input empty, as in
+# GNU); hash mode (hash_files); check mode (check_list, GNU's digest_check:
+# one pass over the list that counts misformatted, unreadable and
+# mismatched lines, then the summary warnings); and sha256sum_report, which
+# picks the mode.
 
 from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE);
 from cli.args import (Options);
@@ -75,8 +87,8 @@ func source_path(edits r: Report, name: string): string {
 }
 
 # The SHA-256 digest of a file or of standard input, in hex. The bytes are
-# read and hashed here: a native build crashes when a function returns
-# `bytes` (see NATIVE-NOTES).
+# read and hashed here: a Loup 1.26.0 native build crashes when a user
+# function returns `bytes`.
 func input_digest(edits r: Report, name: string): string {
     let data = readBytes(source_path(edits: r, name));
     return hex_digest(data);

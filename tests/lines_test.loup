@@ -1,6 +1,11 @@
 @mode(host.dual)
 
-# Output lines, name escaping and quoting, and parsing checksum lines.
+# Unit tests for the text formats (source/commands/lines.loup): output
+# lines, name escaping and quoting, and parsing checksum lines.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this file
+# with Stage0 (`loup-bootstrap test --no-parallel`, source/ on LOUPPATH), one
+# test per `func test_*()`. It is not part of the binary.
 
 from debug.assert import (expect, expectEq);
 from commands.lines import (hash_line, result_name, quote_name, escape_name, unescape_name, needs_escape, cut_at_nul, is_hex, parse_check_line, new_state);

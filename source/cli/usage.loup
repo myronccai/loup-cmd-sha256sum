@@ -1,5 +1,11 @@
 @mode(host.dual)
 
+# Help and version text for sha256sum: usage() is printed by --help,
+# version_line() by --version.
+#
+# Runtime: host.dual. Compiled into the native binary build/sha256sum by
+# `make build`; `loup run source/main.loup` interprets the same code.
+
 from appinfo import (APP_NAME, APP_VERSION);
 
 pub func usage(): string {
